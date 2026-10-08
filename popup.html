@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>收藏到我的导航</title>
+  <link rel="stylesheet" href="popup.css">
+  <script src="popup.js" type="module"></script>
+</head>
+<body>
+  <header><img src="icons/48.png" width="38" height="38" alt=""><div><h1>收藏到我的导航</h1><p>让好用的网站，下次更容易找到。</p></div></header>
+  <main>
+    <section id="loginSection" hidden>
+      <form id="loginForm">
+        <label for="token">导航 Token</label>
+        <input id="token" type="password" autocomplete="off" required placeholder="输入你在导航网站使用的 Token">
+        <p class="hint">首次连接后会记住登录信息，仅保存在当前浏览器。</p>
+        <button class="primary" id="loginButton" type="submit">连接我的导航</button>
+      </form>
+    </section>
+    <section id="bookmarkSection" hidden>
+      <div class="account"><span id="accountName"></span><button id="logoutButton" class="text" type="button">退出账号</button></div>
+      <form id="bookmarkForm">
+        <fieldset id="bookmarkFields">
+          <label for="title">网页标题</label><input id="title" required maxlength="500" placeholder="给这个网页起个名字">
+          <label for="url">网址</label><input id="url" type="url" required placeholder="https://example.com/">
+          <div class="label-row"><label for="category">收藏到分组</label><button class="text" id="refreshButton" type="button">刷新</button></div>
+          <select id="category" required><option value="">正在加载分组…</option></select>
+          <p id="duplicateHint" class="hint" hidden></p>
+          <button id="saveButton" class="primary" type="submit">保存收藏</button>
+        </fieldset>
+      </form>
+    </section>
+    <div id="status" role="status" aria-live="polite"><span id="spinner" hidden></span><span id="statusText">正在准备…</span></div>
+    <button id="retryButton" type="button" class="secondary" hidden>重新加载分组</button>
+  </main>
+  <footer><a href="https://home.zhaoyouning.com/" target="_blank" rel="noopener noreferrer">打开我的导航 ↗</a><span>只收藏你选择的网页</span></footer>
+</body>
+</html>
