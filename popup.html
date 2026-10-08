@@ -17,9 +17,29 @@
         <p class="hint">首次连接后会记住登录信息，仅保存在当前浏览器。</p>
         <button class="primary" id="loginButton" type="submit">连接我的导航</button>
       </form>
+      <button class="secondary" id="showRegisterButton" type="button">没有 Token？注册并生成</button>
+    </section>
+    <section id="registerSection" hidden>
+      <h2>创建自己的导航</h2>
+      <p class="hint">填写名称即可生成 Token，并创建「我的收藏」分组。</p>
+      <form id="registerForm">
+        <label for="registerName">导航名称</label>
+        <input id="registerName" required maxlength="40" placeholder="例如：小林的导航" autocomplete="nickname">
+        <p class="hint">Token 是你的登录凭据。注册成功后请备份，换设备时需要使用。</p>
+        <button class="primary" id="registerButton" type="submit">注册并生成 Token</button>
+      </form>
+      <button class="text back-link" id="backToLoginButton" type="button">已有 Token，返回登录</button>
+    </section>
+    <section id="backupSection" hidden>
+      <h2>备份你的 Token</h2>
+      <p class="hint">已保存在当前浏览器。请另存一份，用于网站登录或更换设备；没有绑定邮箱，丢失后无法自助找回。</p>
+      <label for="backupToken">登录 Token</label>
+      <input id="backupToken" type="password" readonly autocomplete="off">
+      <div class="token-actions"><button id="revealTokenButton" type="button" class="text">显示 Token</button><button id="copyTokenButton" type="button" class="text">复制 Token</button></div>
+      <button id="finishBackupButton" type="button" class="primary">已备份，开始收藏</button>
     </section>
     <section id="bookmarkSection" hidden>
-      <div class="account"><span id="accountName"></span><button id="logoutButton" class="text" type="button">退出账号</button></div>
+      <div class="account"><span id="accountName"></span><div class="account-actions"><button id="backupTokenButton" class="text" type="button">备份 Token</button><button id="logoutButton" class="text" type="button">退出</button></div></div>
       <form id="bookmarkForm">
         <fieldset id="bookmarkFields">
           <label for="title">网页标题</label><input id="title" required maxlength="500" placeholder="给这个网页起个名字">

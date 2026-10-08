@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "我的导航 · 一键收藏",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "将当前网页收藏到 home.zhaoyouning.com，支持选择分组和重复收藏提醒。",
   "minimum_chrome_version": "102",
   "permissions": ["activeTab", "storage"],

@@ -3,6 +3,7 @@ let groups = [];
 let busy = false;
 let savedUrl = "";
 let poll;
+let registrationPoll;
 
 async function send(type, payload = {}) {
   const result = await chrome.runtime.sendMessage({ type, ...payload });
@@ -37,6 +38,7 @@ function setBusy(value) {
   $("token").disabled = value;
   $("logoutButton").disabled = value;
   $("retryButton").disabled = value;
+  for (const id of ["registerButton", "showRegisterButton", "backToLoginButton", "backupTokenButton"]) $(id).disabled = value;
   updateSave();
 }
 
@@ -45,12 +47,17 @@ function showLogin() {
   savedUrl = "";
   $("loginSection").hidden = false;
   $("bookmarkSection").hidden = true;
+  $("registerSection").hidden = true;
+  $("backupSection").hidden = true;
+  $("backupToken").value = "";
   $("retryButton").hidden = true;
 }
 
 function renderNav({ nav, lastCategory }) {
   groups = nav.data;
   $("loginSection").hidden = true;
+  $("registerSection").hidden = true;
+  $("backupSection").hidden = true;
   $("bookmarkSection").hidden = false;
   $("accountName").textContent = nav.tenant.name;
   const selected = lastCategory || $("category").value;
@@ -136,7 +143,11 @@ async function init() {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (urlKey(tab?.url)) { $("url").value = tab.url; $("title").value = tab.title || new URL(tab.url).hostname; }
     const current = await send("state");
-    if (!current.connected) { showLogin(); status("连接一次，下次即可直接收藏。"); return; }
+    if (!current.connected) {
+      if (current.registration) await resumeRegistration();
+      else { showLogin(); status("已有 Token 可直接登录，也可以注册个人导航。"); }
+      return;
+    }
     $("bookmarkSection").hidden = false;
     if (current.operation?.status === "pending") {
       await refresh();
@@ -145,7 +156,86 @@ async function init() {
       await refresh();
       if (current.operation?.status === "unknown") showOperation(current.operation);
     }
+    if (current.backupPending) await showTokenBackup();
   } catch (error) { showLogin(); showError(error); }
-  finally { if (!poll) setBusy(false); }
+  finally { if (!poll && !registrationPoll) setBusy(false); }
 }
+
+function showRegistration(registration = null) {
+  $("loginSection").hidden = true;
+  $("registerSection").hidden = false;
+  $("bookmarkSection").hidden = true;
+  $("registerName").readOnly = Boolean(registration);
+  if (registration) $("registerName").value = registration.name;
+  $("registerButton").textContent = registration ? "继续注册（不会重复创建）" : "注册并生成 Token";
+  status(registration?.message || "创建个人导航，自动生成登录凭据。");
+}
+
+async function showTokenBackup() {
+  const { token } = await send("reveal-token");
+  $("backupToken").value = token;
+  $("backupToken").type = "password";
+  $("revealTokenButton").textContent = "显示 Token";
+  $("bookmarkSection").hidden = true;
+  $("backupSection").hidden = false;
+  $("retryButton").hidden = true;
+  status("请妥善保存 Token，不要分享给他人。");
+}
+
+async function resumeRegistration() {
+  registrationPoll = null;
+  try {
+    const current = await send("state");
+    if (current.connected) {
+      await refresh();
+      await showTokenBackup();
+      setBusy(false);
+    } else if (current.registration?.status === "pending") {
+      showRegistration(current.registration);
+      setBusy(true);
+      status("正在创建导航，关闭窗口后仍会继续…", "", true);
+      registrationPoll = setTimeout(resumeRegistration, 700);
+    } else {
+      showRegistration(current.registration);
+      setBusy(false);
+    }
+  } catch (error) { setBusy(false); showError(error); }
+}
+
+$("showRegisterButton").addEventListener("click", async () => {
+  try { showRegistration((await send("state")).registration); } catch (error) { showError(error); }
+});
+$("backToLoginButton").addEventListener("click", () => { clearTimeout(registrationPoll); showLogin(); status("输入已有 Token 即可连接。"); });
+$("registerForm").addEventListener("submit", async event => {
+  event.preventDefault();
+  if (busy) return;
+  setBusy(true);
+  $("registerName").readOnly = true;
+  status("正在创建导航，关闭窗口后仍会继续…", "", true);
+  try { renderNav(await send("register", { name: $("registerName").value })); await showTokenBackup(); }
+  catch (error) {
+    const current = await send("state").catch(() => ({}));
+    showRegistration(current.registration);
+    status(error.message, "error");
+  } finally { setBusy(false); }
+});
+$("backupTokenButton").addEventListener("click", () => showTokenBackup().catch(showError));
+$("revealTokenButton").addEventListener("click", () => {
+  const reveal = $("backupToken").type === "password";
+  $("backupToken").type = reveal ? "text" : "password";
+  $("revealTokenButton").textContent = reveal ? "隐藏 Token" : "显示 Token";
+});
+$("copyTokenButton").addEventListener("click", async () => {
+  try { await navigator.clipboard.writeText($("backupToken").value); status("Token 已复制，请保存到你信任的位置。", "success"); }
+  catch { $("backupToken").type = "text"; $("backupToken").select(); status("请按 Ctrl+C 或 ⌘C 复制选中的 Token。"); }
+});
+$("finishBackupButton").addEventListener("click", async () => {
+  try {
+    await send("acknowledge-backup");
+    $("backupToken").value = "";
+    $("backupSection").hidden = true;
+    $("bookmarkSection").hidden = false;
+    status("可以开始收藏当前网页了。");
+  } catch (error) { showError(error); }
+});
 init();

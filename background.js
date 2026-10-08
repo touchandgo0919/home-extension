@@ -25,11 +25,13 @@ async function request(path, token, body) {
       cache: "no-store",
       redirect: "error",
       signal: controller.signal,
-      headers: { authorization: `Bearer ${token}`, ...(body ? { "content-type": "application/json" } : {}) },
+      headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), ...(body ? { "content-type": "application/json" } : {}) },
       ...(body ? { body: JSON.stringify(body) } : {}),
     });
     if (!response.ok) {
-      const message = response.status === 401 ? "Token 无效，请重新登录。"
+      const detail = path === "auth/register" ? await response.json().catch(() => ({})) : {};
+      const message = typeof detail.error === "string" ? detail.error.slice(0, 200)
+        : response.status === 401 ? "Token 无效，请重新登录。"
         : response.status === 403 ? "这个账号没有操作权限。"
         : response.status === 404 ? "分组可能已被删除，请刷新后重试。"
         : "导航服务暂时不可用，请稍后重试。";
@@ -69,13 +71,48 @@ function duplicate(nav, url) {
 }
 
 async function state() {
-  const { auth: session, lastCategory, operation } = await chrome.storage.local.get(["auth", "lastCategory", "operation"]);
+  const { auth: session, lastCategory, operation, registration, backupPending } = await chrome.storage.local.get(["auth", "lastCategory", "operation", "registration", "backupPending"]);
   if (operation?.status === "pending" && !busy) {
     operation.status = "unknown";
     operation.message = "上次保存被中断，结果尚未确认。请刷新检查是否已收藏。";
     await chrome.storage.local.set({ operation });
   }
-  return { connected: Boolean(session?.token && Date.now() < session.expiresAt), lastCategory, operation };
+  return {
+    connected: Boolean(session?.token && Date.now() < session.expiresAt), lastCategory, operation, backupPending,
+    registration: registration ? { name: registration.name, status: busy ? "pending" : "retry", message: registration.message } : null,
+  };
+}
+
+async function rememberToken(token, backupPending = false) {
+  const expires = new Date();
+  expires.setFullYear(expires.getFullYear() + 99);
+  // Store the credential before clearing retry information, including when the popup closes.
+  await chrome.storage.local.set({ auth: { token, expiresAt: expires.getTime() }, backupPending });
+  await chrome.storage.local.remove(["lastCategory", "operation", "registration"]);
+}
+
+async function registerAccount(input) {
+  let { registration, auth: current } = await chrome.storage.local.get(["registration", "auth"]);
+  if (current?.token && Date.now() < current.expiresAt) throw fail("请先退出当前账号。", "VALIDATION");
+  if (!registration) {
+    const name = String(input.name || "").trim();
+    if (!name || name.length > 40) throw fail("导航名称需要 1–40 个字符。", "VALIDATION");
+    const key = [...crypto.getRandomValues(new Uint8Array(32))].map(byte => byte.toString(16).padStart(2, "0")).join("");
+    registration = { name, key };
+    await chrome.storage.local.set({ registration });
+  }
+  try {
+    const result = await request("auth/register", null, { name: registration.name, registration_key: registration.key });
+    if (!/^[a-f0-9]{64}$/.test(result.token || "") || !result.nav?.authenticated || !Array.isArray(result.nav?.data)) {
+      throw fail("注册结果暂未确认，请点击继续注册。", "NETWORK");
+    }
+    await rememberToken(result.token, true);
+    return { nav: result.nav };
+  } catch (error) {
+    registration.message = error.message;
+    await chrome.storage.local.set({ registration });
+    throw error;
+  }
 }
 
 async function save(input) {
@@ -115,17 +152,20 @@ async function save(input) {
 async function dispatch(message) {
   await ready;
   if (message.type === "state") return state();
+  if (message.type === "reveal-token") return { token: (await auth()).token };
+  if (message.type === "acknowledge-backup") { await chrome.storage.local.set({ backupPending: false }); return {}; }
   if (message.type === "load") {
     const session = await auth();
     const nav = await navigation(session.token);
     const { lastCategory } = await chrome.storage.local.get("lastCategory");
     return { nav, lastCategory };
   }
-  if (!["login", "logout", "save"].includes(message.type)) throw fail("不支持的操作。");
+  if (!["login", "logout", "save", "register"].includes(message.type)) throw fail("不支持的操作。");
   if (busy) throw fail("正在处理上一次操作，请稍候。", "BUSY");
   busy = true;
   try {
     if (message.type === "save") return await save(message);
+    if (message.type === "register") return await registerAccount(message);
     if (message.type === "logout") {
       await chrome.storage.local.clear();
       return {};
@@ -133,10 +173,7 @@ async function dispatch(message) {
     const token = String(message.token || "").trim();
     if (!token) throw fail("请输入导航 Token。", "VALIDATION");
     const nav = await navigation(token);
-    const expires = new Date();
-    expires.setFullYear(expires.getFullYear() + 99);
-    await chrome.storage.local.remove(["lastCategory", "operation"]);
-    await chrome.storage.local.set({ auth: { token, expiresAt: expires.getTime() } });
+    await rememberToken(token);
     return { nav };
   } finally {
     busy = false;
