@@ -7,7 +7,8 @@ const source = fs.readFileSync(path.join(__dirname, '..', 'background.js'), 'utf
 
 function app() {
   const stored = {};
-  let listener;
+  let listener, menuClick;
+  const menus=[],popupWindows=[];
   let postMode = 'success';
   let posts = 0;
   let navDelay = 0;
@@ -23,6 +24,9 @@ function app() {
     async clear() { for (const key of Object.keys(stored)) delete stored[key]; },
   };
   const chrome = { storage: { local: storage }, runtime: { id: 'test-extension', getURL: value => `chrome-extension://test-extension/${value}`, onMessage: { addListener(fn) { listener = fn; } } } };
+  chrome.i18n={getUILanguage:()=> 'en-US'};
+  chrome.contextMenus={removeAll:async()=>{menus.length=0;},create:menu=>menus.push(menu),onClicked:{addListener:fn=>menuClick=fn}};
+  chrome.action={openPopup:async options=>popupWindows.push(options.windowId)};
   const fetch = async (url, options) => {
     assert.ok(url.startsWith('https://home-api.zhaoyouning.com/api/'));
     assert.equal(options.credentials, 'omit');
@@ -35,22 +39,27 @@ function app() {
       if (registrationFailure) { registrationFailure = false; throw new TypeError('response lost'); }
       return Response.json({token:registrations.get(body.registration_key),nav:{authenticated:true,role:'editor',tenant:{id:2,name:body.name},data:groups}});
     }
-    if (url.endsWith('/nav')) {
+    if (url.endsWith('/collections')) {
       if (navDelay) await new Promise(resolve => setTimeout(resolve, navDelay));
       return Response.json(options.headers.authorization === 'Bearer test-token'
-        ? { authenticated: true, role: 'editor', tenant: { id: 1, name: '测试账号' }, data: groups }
+        ? { authenticated: true, role: 'editor', tenant: { id: 1, name: '测试账号' }, data: groups.map(({links,...g})=>g) }
         : { authenticated: false, data: [] });
     }
+    if(url.includes('/bookmarks/check?')) {const key=new URL(url).searchParams.get('url'); const group=groups.find(g=>g.links.some(b=>b.url===key));return Response.json({bookmark:group?{id:10,category:group.category,category_id:group.id}:null});}
+    if(url.endsWith('/categories')){const {name}=JSON.parse(options.body);const group={id:groups.length+1,category:name,links:[]};groups.push(group);return Response.json({id:group.id});}
     posts++;
+    if(navDelay)await new Promise(resolve=>setTimeout(resolve,navDelay));
     const body = JSON.parse(options.body);
     if (postMode === 'network') throw new TypeError('offline');
     if (postMode === 'server') return new Response('bad gateway', { status: 502 });
-    groups.find(group => group.id === body.category_id).links.push({ id: 10, ...body });
-    return Response.json({ id: 10 });
+    const group=groups.find(g=>g.id===body.category_id);if(!group)return Response.json({error:'Category not found.'},{status:404});
+    const existing=groups.find(g=>g.links.some(b=>b.url===body.url));if(existing)return Response.json({id:10,duplicate:true,category:existing.category,category_id:existing.id});
+    group.links.push({id:10,...body});
+    return Response.json({id:10,category:group.category,category_id:group.id});
   };
   vm.runInNewContext(source, { chrome, fetch, URL, Date, Error, Number, String, Boolean, Array, Object, setTimeout, clearTimeout, AbortController, crypto:require('node:crypto').webcrypto });
   const send = message => new Promise(resolve => listener(message, { id: 'test-extension', url: 'chrome-extension://test-extension/popup.html' }, resolve));
-  return { stored, send, registrationRequests, registrations, login: () => send({ type: 'login', token: 'test-token' }), get posts() { return posts; }, set registrationFailure(value) { registrationFailure = value; }, set postMode(value) { postMode = value; }, set groups(value) { groups = value; }, set navDelay(value) { navDelay = value; } };
+  return { stored, send, menus, popupWindows, menuClick:(info,tab)=>menuClick(info,tab), registrationRequests, registrations, login: () => send({ type: 'login', token: 'test-token' }), get posts() { return posts; }, get groups() { return groups; }, set registrationFailure(value) { registrationFailure = value; }, set postMode(value) { postMode = value; }, set groups(value) { groups = value; }, set navDelay(value) { navDelay = value; } };
 }
 const bookmark = { type: 'save', title: 'Example', url: 'https://example.com/', categoryId: 2 };
 
@@ -69,17 +78,19 @@ test('save writes one bookmark, remembers group, and blocks duplicates even afte
   assert.equal((await a.send(bookmark)).data.status, 'saved');
   assert.equal(a.stored.lastCategory, 2);
   assert.equal((await a.send(bookmark)).data.status, 'duplicate');
-  assert.equal(a.posts, 1);
+  assert.equal(a.posts, 2);
+  assert.equal(a.groups[1].links.length,1);
 });
 
-test('browser/internal URLs and removed groups never reach the write endpoint', async () => {
+test('internal URLs are rejected locally and removed groups are rejected by the server', async () => {
   const a = app(); await a.login();
   for (const url of ['chrome://settings', 'file:///private/data', 'javascript:alert(1)', 'https://user:password@example.com/']) {
     assert.equal((await a.send({ ...bookmark, url })).ok, false);
   }
+  assert.equal(a.posts,0);
   a.groups = [];
   assert.equal((await a.send(bookmark)).data.status, 'failed');
-  assert.equal(a.posts, 0);
+  assert.equal(a.posts, 1);
 });
 
 test('overlapping saves and account switches are blocked while a write is active', async () => {
@@ -135,4 +146,28 @@ test('lost registration response retains a secret nonce and reuses it without cr
   assert.equal(a.registrationRequests[1].registration_key,key);
   assert.equal(a.registrationRequests[1].name,'新用户');
   assert.equal(a.registrations.size,1);
+});
+
+
+test('collection creation and URL checks use lightweight endpoints',async()=>{
+ const a=app();await a.login();const group=await a.send({type:'create-category',name:'New'});assert.equal(group.data.id,3);
+ const loaded=await a.send({type:'load'});assert.equal(loaded.data.nav.data[0].links,undefined);
+ await a.send(bookmark);const checked=await a.send({type:'check-url',url:bookmark.url});assert.equal(checked.data.bookmark.category_id,2);
+});
+test('uncertain saves reuse their request ID when explicitly retried',async()=>{
+ const a=app();await a.login();a.postMode='network';await a.send(bookmark);const key=a.stored.operation.requestId;
+ a.postMode='success';await a.send(bookmark);assert.equal(a.stored.operation.requestId,key);assert.equal(a.stored.operation.status,'saved');
+});
+test('English and Chinese UI translation preserves user collection names',async()=>{
+ const {translate,resolveLanguage}=await import('../i18n.js');assert.equal(resolveLanguage('auto','en-US'),'en');assert.equal(resolveLanguage('zh','en-US'),'zh');assert.equal(translate('保存收藏','en'),'Save bookmark');assert.equal(translate('已保存到「我的工作」。','en'),'Saved to “我的工作”.');assert.equal(translate('保存收藏','zh'),'保存收藏');
+});
+
+test('context menus stage the selected link without writing and preserve the source window',async()=>{
+ const a=app();await a.send({type:'set-language',language:'en'});assert.equal(a.menus.length,2);assert.match(a.menus[1].title,/Save link/);
+ await a.menuClick({menuItemId:'save-link',linkUrl:'https://selected.example/path',pageUrl:'https://source.example/'},{windowId:7,title:'Source page'});
+ assert.equal(a.stored.pendingPage.url,'https://selected.example/path');assert.equal(a.popupWindows[0],7);assert.equal(a.posts,0);
+ assert.equal((await a.send({type:'state'})).data.pendingPage.url,'https://selected.example/path');
+ await a.send({type:'consume-page'});assert.equal(a.stored.pendingPage,undefined);
+ await a.menuClick({linkUrl:'javascript:alert(1)'},{windowId:7});assert.equal(a.stored.pendingPage,undefined);
+ await a.send({type:'set-language',language:'zh'});assert.match(a.menus[0].title,/收藏网页/);
 });

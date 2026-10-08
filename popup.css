@@ -11,3 +11,5 @@ button{font:inherit;cursor:pointer;border:0;border-radius:7px}button:focus-visib
 @media(prefers-color-scheme:dark){:root{--bg:#101722;--surface:#182131;--text:#f2f4f7;--muted:#a6b0c2;--border:#344054;--accent:#719cff;--soft:#202f4b;--error:#fda29b;--success:#75dfa9}.primary{color:#101828}}
 @media(prefers-reduced-motion:reduce){#spinner{animation-duration:1.8s}}
 h2{font-size:16px;margin:0 0 8px}.back-link{margin-top:14px}.account-actions,.token-actions{display:flex;gap:12px;flex-shrink:0}.token-actions{justify-content:space-between;margin-top:10px}#accountName{max-width:160px}#backupToken{font-family:monospace;font-size:12px}#registerForm label{margin-top:15px}
+
+.onboarding{font-size:11px;color:var(--muted);margin:0 0 12px;line-height:1.6}.preferences{display:flex;align-items:center;gap:12px;padding:0 20px 12px;font-size:11px}.preferences label{margin:0}.preferences select{width:145px;min-height:30px;padding:4px;font-size:11px}html[lang="en"] h1{font-size:17px}html[lang="en"] .account{gap:6px}html[lang="en"] #accountName{max-width:112px}.account-actions{gap:8px}#newCategoryFields{margin-bottom:12px}#showCategoryButton{margin-bottom:6px}

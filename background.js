@@ -29,7 +29,7 @@ async function request(path, token, body) {
       ...(body ? { body: JSON.stringify(body) } : {}),
     });
     if (!response.ok) {
-      const detail = path === "auth/register" ? await response.json().catch(() => ({})) : {};
+      const detail = await response.json().catch(() => ({}));
       const message = typeof detail.error === "string" ? detail.error.slice(0, 200)
         : response.status === 401 ? "Token 无效，请重新登录。"
         : response.status === 403 ? "这个账号没有操作权限。"
@@ -47,9 +47,9 @@ async function request(path, token, body) {
 }
 
 async function navigation(token) {
-  const nav = await request("nav", token);
+  const nav = await request("collections", token);
   if (!nav.authenticated) throw fail("Token 无效，请重新登录。", "HTTP_401");
-  if (!nav.tenant?.id || !Array.isArray(nav.data) || !nav.data.every(group => Array.isArray(group.links))) {
+  if (!nav.tenant?.id || !Array.isArray(nav.data)) {
     throw fail("导航数据格式异常，请稍后重试。");
   }
   return nav;
@@ -71,14 +71,15 @@ function duplicate(nav, url) {
 }
 
 async function state() {
-  const { auth: session, lastCategory, operation, registration, backupPending } = await chrome.storage.local.get(["auth", "lastCategory", "operation", "registration", "backupPending"]);
+  const { auth: session, lastCategory, operation, registration, backupPending, pendingPage, onboarded } = await chrome.storage.local.get(["auth", "lastCategory", "operation", "registration", "backupPending", "pendingPage", "onboarded"]);
   if (operation?.status === "pending" && !busy) {
     operation.status = "unknown";
     operation.message = "上次保存被中断，结果尚未确认。请刷新检查是否已收藏。";
     await chrome.storage.local.set({ operation });
   }
   return {
-    connected: Boolean(session?.token && Date.now() < session.expiresAt), lastCategory, operation, backupPending,
+    connected: Boolean(session?.token && Date.now() < session.expiresAt), lastCategory, operation, backupPending, onboarded,
+    pendingPage: pendingPage && Date.now()-pendingPage.createdAt<300000 ? pendingPage : null,
     registration: registration ? { name: registration.name, status: busy ? "pending" : "retry", message: registration.message } : null,
   };
 }
@@ -98,11 +99,11 @@ async function registerAccount(input) {
     const name = String(input.name || "").trim();
     if (!name || name.length > 40) throw fail("导航名称需要 1–40 个字符。", "VALIDATION");
     const key = [...crypto.getRandomValues(new Uint8Array(32))].map(byte => byte.toString(16).padStart(2, "0")).join("");
-    registration = { name, key };
+    registration = { name, key, language: input.language === "en" ? "en" : "zh" };
     await chrome.storage.local.set({ registration });
   }
   try {
-    const result = await request("auth/register", null, { name: registration.name, registration_key: registration.key });
+    const result = await request("auth/register", null, { name: registration.name, registration_key: registration.key, language: registration.language });
     if (!/^[a-f0-9]{64}$/.test(result.token || "") || !result.nav?.authenticated || !Array.isArray(result.nav?.data)) {
       throw fail("注册结果暂未确认，请点击继续注册。", "NETWORK");
     }
@@ -121,25 +122,19 @@ async function save(input) {
   const title = String(input.title || "").trim();
   const categoryId = Number(input.categoryId);
   if (!title || !Number.isSafeInteger(categoryId) || categoryId < 1) throw fail("请填写标题并选择分组。", "VALIDATION");
-  const operation = { status: "pending", url, title, categoryId, startedAt: Date.now() };
+  const previous = (await chrome.storage.local.get("operation")).operation;
+  const requestId = previous?.status === "unknown" && previous.url === url && previous.title === title && previous.categoryId === categoryId ? previous.requestId : crypto.randomUUID();
+  const operation = { status: "pending", url, title, categoryId, requestId, startedAt: Date.now() };
   await chrome.storage.local.set({ operation });
   let postStarted = false;
   try {
-    // Refresh before writing: the group or bookmark may have changed in another tab.
-    const nav = await navigation(session.token);
-    if (!nav.data.some(group => Number(group.id) === categoryId)) throw fail("分组已被删除，请刷新后重试。", "VALIDATION");
-    const existing = duplicate(nav, url);
-    if (existing) {
-      operation.status = "duplicate";
-      operation.message = `已收藏在「${existing.category}」，没有重复添加。`;
-    } else {
-      postStarted = true;
-      const result = await request("bookmarks", session.token, { title, url, category_id: categoryId });
-      if (!result.id) throw fail("保存结果尚未确认。", "NETWORK");
-      operation.status = "saved";
-      operation.message = `已保存到「${nav.data.find(group => Number(group.id) === categoryId).category}」。`;
-      await chrome.storage.local.set({ lastCategory: categoryId });
-    }
+    postStarted = true;
+    const result = await request("bookmarks", session.token, { title, url, category_id: categoryId, request_id: requestId });
+    if (!result.id) throw fail("保存结果尚未确认。", "NETWORK");
+    operation.status = result.duplicate ? "duplicate" : "saved";
+    operation.message = result.duplicate ? `已收藏在「${result.category || "我的收藏"}」，没有重复添加。` : `已保存到「${result.category || "我的收藏"}」。`;
+    await chrome.storage.local.set({ lastCategory: result.category_id || categoryId, onboarded: true });
+    await chrome.storage.local.remove("pendingPage");
   } catch (error) {
     const uncertain = postStarted && (error.code === "NETWORK" || /^HTTP_5/.test(error.code || ""));
     operation.status = uncertain ? "unknown" : "failed";
@@ -152,6 +147,9 @@ async function save(input) {
 async function dispatch(message) {
   await ready;
   if (message.type === "state") return state();
+  if (message.type === "consume-page") { await chrome.storage.local.remove("pendingPage"); return {}; }
+  if (message.type === "set-language") { if(!["auto","zh","en"].includes(message.language)) throw fail("Invalid language"); await chrome.storage.local.set({language:message.language}); await setupMenus(); return {}; }
+  if (message.type === "check-url") return request("bookmarks/check?url=" + encodeURIComponent(webUrl(message.url)), (await auth()).token);
   if (message.type === "reveal-token") return { token: (await auth()).token };
   if (message.type === "acknowledge-backup") { await chrome.storage.local.set({ backupPending: false }); return {}; }
   if (message.type === "load") {
@@ -160,14 +158,17 @@ async function dispatch(message) {
     const { lastCategory } = await chrome.storage.local.get("lastCategory");
     return { nav, lastCategory };
   }
-  if (!["login", "logout", "save", "register"].includes(message.type)) throw fail("不支持的操作。");
+  if (!["login", "logout", "save", "register", "create-category"].includes(message.type)) throw fail("不支持的操作。");
   if (busy) throw fail("正在处理上一次操作，请稍候。", "BUSY");
   busy = true;
   try {
     if (message.type === "save") return await save(message);
+    if (message.type === "create-category") return request("categories", (await auth()).token, {name:String(message.name || "").trim()});
     if (message.type === "register") return await registerAccount(message);
     if (message.type === "logout") {
+      const { language } = await chrome.storage.local.get("language");
       await chrome.storage.local.clear();
+      if(language) await chrome.storage.local.set({language});
       return {};
     }
     const token = String(message.token || "").trim();
@@ -184,4 +185,22 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (sender.id !== chrome.runtime.id || !sender.url?.startsWith(chrome.runtime.getURL(""))) return false;
   dispatch(message).then(data => respond({ ok: true, data }), error => respond({ ok: false, error: error.message, code: error.code }));
   return true;
+});
+
+async function setupMenus() {
+  if(!chrome.contextMenus)return;
+  const {language}=await chrome.storage.local.get("language");
+  const en=language==="en" || (language!=="zh" && !/^zh/i.test(chrome.i18n.getUILanguage()));
+  await chrome.contextMenus.removeAll();
+  chrome.contextMenus.create({id:"save-page",title:en?"Save page to My Navigation":"收藏网页到我的导航",contexts:["page"],documentUrlPatterns:["http://*/*","https://*/*"]});
+  chrome.contextMenus.create({id:"save-link",title:en?"Save link to My Navigation":"收藏链接到我的导航",contexts:["link"],targetUrlPatterns:["http://*/*","https://*/*"]});
+}
+chrome.runtime.onInstalled?.addListener(()=>setupMenus().catch(()=>{}));
+chrome.runtime.onStartup?.addListener(()=>setupMenus().catch(()=>{}));
+chrome.contextMenus?.onClicked.addListener(async(info,tab)=>{
+  try {
+    const url=webUrl(info.linkUrl || info.pageUrl || tab.url);
+    await chrome.storage.local.set({pendingPage:{url,title:info.linkUrl ? info.selectionText || info.linkUrl : tab.title || url,createdAt:Date.now()}});
+    await chrome.action.openPopup({windowId:tab.windowId});
+  } catch { /* The popup remains available from the toolbar if opening is blocked. */ }
 });

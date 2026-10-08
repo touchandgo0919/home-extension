@@ -1,0 +1,11 @@
+{
+  "extensionName": {
+    "message": "My Navigation — Save Bookmarks"
+  },
+  "extensionDescription": {
+    "message": "Save the current page to your navigation, organize collections, and avoid duplicates."
+  },
+  "actionTitle": {
+    "message": "Save to My Navigation"
+  }
+}

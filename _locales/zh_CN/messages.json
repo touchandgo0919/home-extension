@@ -1,0 +1,11 @@
+{
+  "extensionName": {
+    "message": "我的导航 · 一键收藏"
+  },
+  "extensionDescription": {
+    "message": "收藏当前网页，整理分组，避免重复收藏。"
+  },
+  "actionTitle": {
+    "message": "收藏到我的导航"
+  }
+}
