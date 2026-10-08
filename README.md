@@ -38,7 +38,7 @@
 
 ## 打包
 
-执行 `npm run package`，生成 `dist/home-navigation-chrome-1.1.0.zip`；需要 Python 3，无需安装依赖。
+执行 `npm run package`，生成 `dist/home-navigation-chrome-1.1.1.zip`；需要 Python 3，无需安装依赖。
 执行 `npm test` 运行后台流程测试；需要 Node.js 20 或更高版本。
 注册功能需要后端部署 `POST /api/auth/register` 及注册限流绑定，无需数据库迁移。
 多个设备同时提交同一网址仍可能重复，当前 API 尚无服务端唯一约束。
