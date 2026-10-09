@@ -11,6 +11,7 @@ export const messages = {
  '登录 Token':'Sign-in Token','显示 Token':'Show Token','隐藏 Token':'Hide Token','复制 Token':'Copy Token','已备份，开始收藏':'Backed up — start saving',
  '备份 Token':'Back up Token','退出':'Sign out','网页标题':'Page title','给这个网页起个名字':'Give this page a name','网址':'URL','收藏到分组':'Collection','刷新':'Refresh','新建分组':'New collection','分组名称':'Collection name','创建':'Create','取消':'Cancel','保存收藏':'Save bookmark','已保存':'Saved','已收藏':'Already saved',
  '正在准备…':'Getting ready…','重新加载分组':'Reload collections','打开我的导航 ↗':'Open my navigation ↗','只收藏你选择的网页':'Only saves pages you choose',
+ '正在加载分组…':'Loading collections…',
  '已有 Token 可直接登录，也可以注册个人导航。':'Sign in with a Token or create your own navigation.',
  '创建个人导航，自动生成登录凭据。':'Create your navigation and generate a sign-in Token.',
  '正在创建导航，关闭窗口后仍会继续…':'Creating your navigation. You can close this popup.',

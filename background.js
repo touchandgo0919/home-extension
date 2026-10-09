@@ -58,7 +58,7 @@ async function navigation(token) {
 async function auth() {
   const { auth: session } = await chrome.storage.local.get("auth");
   if (!session?.token || Date.now() >= session.expiresAt) {
-    await chrome.storage.local.remove(["auth", "lastCategory", "operation"]);
+    await chrome.storage.local.remove(["auth", "navCache", "lastCategory", "operation"]);
     throw fail("请先输入导航 Token。", "HTTP_401");
   }
   return session;
@@ -70,25 +70,31 @@ function duplicate(nav, url) {
   }));
 }
 
+async function cacheKey(token) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
+  return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, "0")).join("");
+}
+
 async function state() {
-  const { auth: session, lastCategory, operation, registration, backupPending, pendingPage, onboarded } = await chrome.storage.local.get(["auth", "lastCategory", "operation", "registration", "backupPending", "pendingPage", "onboarded"]);
+  const { auth: session, navCache, lastCategory, operation, registration, backupPending, pendingPage, onboarded } = await chrome.storage.local.get(["auth", "navCache", "lastCategory", "operation", "registration", "backupPending", "pendingPage", "onboarded"]);
   if (operation?.status === "pending" && !busy) {
     operation.status = "unknown";
     operation.message = "上次保存被中断，结果尚未确认。请刷新检查是否已收藏。";
     await chrome.storage.local.set({ operation });
   }
+  const connected = Boolean(session?.token && Date.now() < session.expiresAt);
   return {
-    connected: Boolean(session?.token && Date.now() < session.expiresAt), lastCategory, operation, backupPending, onboarded,
+    connected, navCache: connected && navCache?.key === await cacheKey(session.token) ? navCache.nav : null, lastCategory, operation, backupPending, onboarded,
     pendingPage: pendingPage && Date.now()-pendingPage.createdAt<300000 ? pendingPage : null,
     registration: registration ? { name: registration.name, status: busy ? "pending" : "retry", message: registration.message } : null,
   };
 }
 
-async function rememberToken(token, backupPending = false) {
+async function rememberToken(token, backupPending = false, navCache = null) {
   const expires = new Date();
   expires.setFullYear(expires.getFullYear() + 99);
   // Store the credential before clearing retry information, including when the popup closes.
-  await chrome.storage.local.set({ auth: { token, expiresAt: expires.getTime() }, backupPending });
+  await chrome.storage.local.set({ auth: { token, expiresAt: expires.getTime() }, backupPending, navCache: navCache ? { key: await cacheKey(token), nav: navCache } : null });
   await chrome.storage.local.remove(["lastCategory", "operation", "registration"]);
 }
 
@@ -107,7 +113,7 @@ async function registerAccount(input) {
     if (!/^[a-f0-9]{64}$/.test(result.token || "") || !result.nav?.authenticated || !Array.isArray(result.nav?.data)) {
       throw fail("注册结果暂未确认，请点击继续注册。", "NETWORK");
     }
-    await rememberToken(result.token, true);
+    await rememberToken(result.token, true, result.nav);
     return { nav: result.nav };
   } catch (error) {
     registration.message = error.message;
@@ -155,6 +161,8 @@ async function dispatch(message) {
   if (message.type === "load") {
     const session = await auth();
     const nav = await navigation(session.token);
+    if ((await auth()).token !== session.token) throw fail("账号已切换，请重新打开扩展。", "HTTP_401");
+    await chrome.storage.local.set({ navCache: { key: await cacheKey(session.token), nav } });
     const { lastCategory } = await chrome.storage.local.get("lastCategory");
     return { nav, lastCategory };
   }
@@ -174,7 +182,7 @@ async function dispatch(message) {
     const token = String(message.token || "").trim();
     if (!token) throw fail("请输入导航 Token。", "VALIDATION");
     const nav = await navigation(token);
-    await rememberToken(token);
+    await rememberToken(token, false, nav);
     return { nav };
   } finally {
     busy = false;

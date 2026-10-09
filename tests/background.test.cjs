@@ -57,7 +57,7 @@ function app() {
     group.links.push({id:10,...body});
     return Response.json({id:10,category:group.category,category_id:group.id});
   };
-  vm.runInNewContext(source, { chrome, fetch, URL, Date, Error, Number, String, Boolean, Array, Object, setTimeout, clearTimeout, AbortController, crypto:require('node:crypto').webcrypto });
+  vm.runInNewContext(source, { chrome, fetch, URL, Date, Error, Number, String, Boolean, Array, Object, TextEncoder, setTimeout, clearTimeout, AbortController, crypto:require('node:crypto').webcrypto });
   const send = message => new Promise(resolve => listener(message, { id: 'test-extension', url: 'chrome-extension://test-extension/popup.html' }, resolve));
   return { stored, send, menus, popupWindows, menuClick:(info,tab)=>menuClick(info,tab), registrationRequests, registrations, login: () => send({ type: 'login', token: 'test-token' }), get posts() { return posts; }, get groups() { return groups; }, set registrationFailure(value) { registrationFailure = value; }, set postMode(value) { postMode = value; }, set groups(value) { groups = value; }, set navDelay(value) { navDelay = value; } };
 }
@@ -153,6 +153,24 @@ test('collection creation and URL checks use lightweight endpoints',async()=>{
  const a=app();await a.login();const group=await a.send({type:'create-category',name:'New'});assert.equal(group.data.id,3);
  const loaded=await a.send({type:'load'});assert.equal(loaded.data.nav.data[0].links,undefined);
  await a.send(bookmark);const checked=await a.send({type:'check-url',url:bookmark.url});assert.equal(checked.data.bookmark.category_id,2);
+});
+test('cached collections appear in state and are cleared on account sign-out',async()=>{
+ const a=app();await a.login();
+ assert.equal((await a.send({type:'state'})).data.navCache.data[0].category,'工作');
+ a.groups=[...a.groups,{id:3,category:'新分组',links:[]}];
+ assert.equal((await a.send({type:'load'})).data.nav.data[2].category,'新分组');
+ assert.equal((await a.send({type:'state'})).data.navCache.data[2].category,'新分组');
+ await a.send({type:'logout'});
+ assert.equal((await a.send({type:'state'})).data.navCache,null);
+ assert.equal(a.stored.navCache,undefined);
+});
+test('an old collection response cannot repopulate the cache after sign-out',async()=>{
+ const a=app();await a.login();a.navDelay=30;
+ const loading=a.send({type:'load'});
+ await new Promise(resolve=>setTimeout(resolve,5));
+ await a.send({type:'logout'});
+ assert.equal((await loading).code,'HTTP_401');
+ assert.equal(a.stored.navCache,undefined);
 });
 test('uncertain saves reuse their request ID when explicitly retried',async()=>{
  const a=app();await a.login();a.postMode='network';await a.send(bookmark);const key=a.stored.operation.requestId;
