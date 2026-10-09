@@ -32,6 +32,7 @@ function status(text, kind = "", loading = false) {
   $("statusText").textContent = t(text);
   $("status").dataset.kind = kind;
   $("spinner").hidden = !loading;
+  $("status").hidden = !text && !loading;
 }
 
 function urlKey(value) {
@@ -71,6 +72,7 @@ function setBusy(value) {
 function showLogin() {
   groups = [];
   savedUrl = "";
+  setCreateMode(false);
   $("loginSection").hidden = false;
   $("bookmarkSection").hidden = true;
   $("registerSection").hidden = true;
@@ -81,6 +83,7 @@ function showLogin() {
 
 function renderNav({ nav, lastCategory }, preserveStatus = false) {
   groups = nav.data;
+  $("onboarding").hidden = true;
   checkedUrl = ""; duplicateBookmark = null;
   queueDuplicateCheck();
   $("loginSection").hidden = true;
@@ -93,7 +96,7 @@ function renderNav({ nav, lastCategory }, preserveStatus = false) {
   if (groups.some(group => String(group.id) === String(selected))) $("category").value = String(selected);
   if (!groups.length) $("category").add(new Option(t("请先在导航中创建分组"), ""));
   $("retryButton").hidden = true;
-  if (!preserveStatus) status(!groups.length ? t("暂无分组，请打开导航创建后点击刷新。") : urlKey($("url").value) ? t("确认标题和分组后，即可保存。") : t("当前页面无法收藏。请切换到普通网页，或手动填写网址。"));
+  if (!preserveStatus) status(!groups.length ? t("暂无分组，请打开导航创建后点击刷新。") : urlKey($("url").value) ? "" : t("当前页面无法收藏。请切换到普通网页，或手动填写网址。"));
   updateSave();
 }
 
@@ -178,7 +181,7 @@ async function init() {
       if (pending) { $("url").value = pending.url; $("title").value = pending.title; }
       await send("consume-page");
     }
-    $("onboarding").hidden = Boolean(current.onboarded);
+    $("onboarding").hidden = Boolean(current.connected || current.onboarded);
     if (!current.connected) {
       if (current.registration) await resumeRegistration();
       else { showLogin(); status(t("已有 Token 可直接登录，也可以注册个人导航。")); }
@@ -276,11 +279,18 @@ $("finishBackupButton").addEventListener("click", async () => {
     void refresh();
   } catch (error) { showError(error); }
 });
-$("showCategoryButton").addEventListener("click",()=>{ $("newCategoryFields").hidden=!$("newCategoryFields").hidden; if(!$("newCategoryFields").hidden)$("newCategoryName").focus(); });
+function setCreateMode(open) {
+  $("newCategoryFields").hidden = !open;
+  $("category").hidden = open;
+  $("saveButton").hidden = open;
+  $("showCategoryButton").textContent = t(open ? "取消" : "新建分组");
+  if (open) $("newCategoryName").focus();
+}
+$("showCategoryButton").addEventListener("click",()=>setCreateMode($("newCategoryFields").hidden));
 $("newCategoryName").addEventListener("keydown",event=>{if(event.key==="Enter"){event.preventDefault();$("createCategoryButton").click();}});
 $("createCategoryButton").addEventListener("click",async()=>{
   setBusy(true);status(t("正在创建分组…"),"",true);
-  try { const name=$("newCategoryName").value.trim(); const result=await send("create-category",{name}); if(![...$("category").options].some(option=>option.value===String(result.id))) $("category").add(new Option(name,String(result.id))); if(!groups.some(group=>String(group.id)===String(result.id))) groups.push({id:result.id,category:name}); $("category").value=String(result.id); $("newCategoryFields").hidden=true; $("newCategoryName").value=""; status(t("分组创建成功。")); void refresh(); }
+  try { const name=$("newCategoryName").value.trim(); const result=await send("create-category",{name}); if(![...$("category").options].some(option=>option.value===String(result.id))) $("category").add(new Option(name,String(result.id))); if(!groups.some(group=>String(group.id)===String(result.id))) groups.push({id:result.id,category:name}); $("category").value=String(result.id); setCreateMode(false); $("newCategoryName").value=""; status(t("分组创建成功。")); void refresh(); }
   catch(error){showError(error);} finally{setBusy(false);}
 });
 function queueDuplicateCheck(){clearTimeout(checkTimer);const value=urlKey($("url").value);checkTimer=setTimeout(()=>checkDuplicate(value),200);}
