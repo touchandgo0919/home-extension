@@ -11,6 +11,8 @@ document.title=t(document.title);
 for(const link of document.querySelectorAll('a[href$="/help/"],a[href$="/privacy/"]')) link.href += `?lang=${language}`;
 const $ = id => document.getElementById(id);
 let groups = [];
+let selectedCategoryId = null;
+let currentPage = null;
 let busy = false;
 let savedUrl = "";
 let poll;
@@ -37,13 +39,19 @@ function urlKey(value) {
   catch { return ""; }
 }
 
+function pageFrom(url, title) {
+  const key = urlKey(url);
+  if (!key) return null;
+  return { url: key, title: String(title || "").trim().slice(0, 500) || new URL(key).hostname };
+}
+
 function updateSave() {
-  const key = urlKey($("url").value);
+  const key = currentPage?.url || "";
   const existing = key === checkedUrl && duplicateBookmark;
   $("duplicateHint").hidden = !existing;
   $("duplicateHint").textContent = existing ? t(`已经收藏在「${existing.category}」。`) : "";
-  $("saveButton").disabled = busy || !key || !$("title").value.trim() || !$("category").value || Boolean(existing) || key === savedUrl;
-  $("saveButton").textContent = key && key === savedUrl ? t("已保存") : existing ? t("已收藏") : t("保存收藏");
+  $("saveButton").disabled = busy || !key || !currentPage?.title || !selectedCategoryId || Boolean(existing) || key === savedUrl;
+  $("saveButton").textContent = key && key === savedUrl ? t("已保存") : existing ? t("已收藏") : t("保存当前网页");
 }
 
 function setBusy(value) {
@@ -52,8 +60,6 @@ function setBusy(value) {
   $("loginButton").disabled = value;
   $("token").disabled = value;
   $("logoutButton").disabled = value;
-  $("createCategoryButton").disabled = value;
-  $("showCategoryButton").disabled = value;
   $("retryButton").disabled = value;
   for (const id of ["registerButton", "showRegisterButton", "backToLoginButton", "backupTokenButton"]) $(id).disabled = value;
   updateSave();
@@ -61,6 +67,7 @@ function setBusy(value) {
 
 function showLogin() {
   groups = [];
+  selectedCategoryId = null;
   savedUrl = "";
   $("loginSection").hidden = false;
   $("bookmarkSection").hidden = true;
@@ -79,12 +86,10 @@ function renderNav({ nav, lastCategory }) {
   $("backupSection").hidden = true;
   $("bookmarkSection").hidden = false;
   $("accountName").textContent = nav.tenant.name;
-  const selected = lastCategory || $("category").value;
-  $("category").replaceChildren(...groups.map(group => new Option(group.category, String(group.id))));
-  if (groups.some(group => String(group.id) === String(selected))) $("category").value = String(selected);
-  if (!groups.length) $("category").add(new Option(t("请先在导航中创建分组"), ""));
+  const selected = lastCategory || selectedCategoryId;
+  selectedCategoryId = groups.find(group => String(group.id) === String(selected))?.id || groups[0]?.id || null;
   $("retryButton").hidden = true;
-  status(!groups.length ? t("暂无分组，请打开导航创建后点击刷新。") : urlKey($("url").value) ? t("确认标题和分组后，即可保存。") : t("当前页面无法收藏。请切换到普通网页，或手动填写网址。") );
+  status(!groups.length ? t("暂无分组，请先在导航网站创建分组。") : currentPage ? t("点击保存，即可收藏当前网页。") : t("当前页面无法收藏。请打开普通网页后重试。"));
   updateSave();
 }
 
@@ -103,7 +108,7 @@ async function refresh() {
 }
 
 function showOperation(operation) {
-  const matches = operation?.url === urlKey($("url").value);
+  const matches = operation?.url === currentPage?.url;
   if (operation?.status === "pending") {
     setBusy(true);
     status(t("正在保存收藏，关闭窗口后仍会继续…"), "", true);
@@ -112,7 +117,7 @@ function showOperation(operation) {
   }
   setBusy(false);
   if (!matches) {
-    status(operation?.status === "saved" ? t("上一个网页已保存，可以继续收藏当前网页。") : t("确认标题和分组后，即可保存。"));
+    status(operation?.status === "saved" ? t("上一个网页已保存，可以继续收藏当前网页。") : t("点击保存，即可收藏当前网页。"));
     return;
   }
   if (["saved", "duplicate"].includes(operation.status)) savedUrl = operation.url;
@@ -142,7 +147,7 @@ $("bookmarkForm").addEventListener("submit", async event => {
   if (busy || $("saveButton").disabled) return;
   setBusy(true);
   status(t("正在保存收藏，关闭窗口后仍会继续…"), "", true);
-  try { showOperation(await send("save", { title: $("title").value, url: $("url").value, categoryId: $("category").value, language })); }
+  try { showOperation(await send("save", { title: currentPage.title, url: currentPage.url, categoryId: selectedCategoryId, language })); }
   catch (error) { setBusy(false); showError(error); }
 });
 
@@ -152,17 +157,15 @@ $("logoutButton").addEventListener("click", async () => {
   catch (error) { showError(error); }
   finally { setBusy(false); }
 });
-$("refreshButton").addEventListener("click", refresh);
 $("retryButton").addEventListener("click", refresh);
-for (const id of ["title", "url", "category"]) $(id).addEventListener("input", updateSave);
 
 async function init() {
   setBusy(true);
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (urlKey(tab?.url)) { $("url").value = tab.url; $("title").value = tab.title || new URL(tab.url).hostname; }
+    currentPage = pageFrom(tab?.url, tab?.title);
     const current = await send("state");
-    if (current.pendingPage) { $("url").value=current.pendingPage.url; $("title").value=current.pendingPage.title; await send("consume-page"); }
+    if (current.pendingPage) { currentPage = pageFrom(current.pendingPage.url, current.pendingPage.title); await send("consume-page"); }
     $("onboarding").hidden = Boolean(current.onboarded);
     if (!current.connected) {
       if (current.registration) await resumeRegistration();
@@ -259,17 +262,6 @@ $("finishBackupButton").addEventListener("click", async () => {
     status(t("可以开始收藏当前网页了。"));
   } catch (error) { showError(error); }
 });
-$("languageSelect").value=preferences.language || "auto";
-$("helpLink").href += `?lang=${language}`;
-$("privacyLink").href += `?lang=${language}`;
-$("languageSelect").addEventListener("change",async()=>{await send("set-language",{language:$("languageSelect").value});location.reload();});
-$("showCategoryButton").addEventListener("click",()=>{ $("newCategoryFields").hidden=!$("newCategoryFields").hidden; if(!$("newCategoryFields").hidden)$("newCategoryName").focus(); });
-$("newCategoryName").addEventListener("keydown",event=>{if(event.key==="Enter"){event.preventDefault();$("createCategoryButton").click();}});
-$("createCategoryButton").addEventListener("click",async()=>{
- setBusy(true);status(t("正在创建分组…"),"",true);
- try{const result=await send("create-category",{name:$("newCategoryName").value});renderNav(await send("load"));$("category").value=String(result.id);$("newCategoryFields").hidden=true;$("newCategoryName").value="";status(t("分组创建成功。"));}catch(error){showError(error);}finally{setBusy(false);}
-});
-function queueDuplicateCheck(){clearTimeout(checkTimer);const value=urlKey($("url").value);checkTimer=setTimeout(()=>checkDuplicate(value),200);}
-async function checkDuplicate(value){const sequence=++checkSequence;if(!value)return;try{const result=await send("check-url",{url:value});if(sequence!==checkSequence||urlKey($("url").value)!==value)return;checkedUrl=value;duplicateBookmark=result.bookmark;updateSave();}catch{/* Saving still performs an atomic server-side duplicate check. */}}
-$("url").addEventListener("input",()=>{checkedUrl="";duplicateBookmark=null;queueDuplicateCheck();});
+function queueDuplicateCheck(){clearTimeout(checkTimer);const value=currentPage?.url || "";checkTimer=setTimeout(()=>checkDuplicate(value),200);}
+async function checkDuplicate(value){const sequence=++checkSequence;if(!value)return;try{const result=await send("check-url",{url:value});if(sequence!==checkSequence||currentPage?.url!==value)return;checkedUrl=value;duplicateBookmark=result.bookmark;updateSave();}catch{/* Saving still performs an atomic server-side duplicate check. */}}
 init();
